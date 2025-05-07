@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "rc-pulse-transit-time"
+version = "0.1.0"
+description = ""
+authors = ["Romain Cardis <romain.cardis@mindmaze.ch>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+matplotlib = "~3.8.0"
+pyqt5-qt5 = "5.15.2"
+PyQt5 = "~5.15.0"
+ipython = "8.23.0"
+pandas = "^2.2.2"
+seaborn = "^0.13.2"
+scikit-learn = "^1.5.1"
+scipy = "^1.14.0"
+statsmodels = "^0.14.2"
+numpy = "^1.20.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
