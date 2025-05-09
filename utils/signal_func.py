@@ -4,9 +4,7 @@ import numpy as np
 
 def cheby2_filter(sig, cut, fs, btype, axis=0):
     # Optimal filter according to https://www.nature.com/articles/sdata201876
-    if len(cut) > 1:
-        cut = np.array(cut)
-    sos = signal.cheby2(N=4, rs=20, Wn=cut, fs=fs, btype=btype, output='sos')
+    sos = signal.cheby2(N=2, rs=20, Wn=cut, fs=fs, btype=btype, output='sos')  # order 2 because filtfilt goes twice
     fsig = signal.sosfiltfilt(sos=sos, x=sig, axis=axis)
 
     return fsig
@@ -24,8 +22,3 @@ def norm_x_corr(a, b, fs):
     lags = lags / fs
 
     return lags, cco
-
-def extract_ppg_features(ppg, fs):
-    vpg = np.diff(ppg)
-    apg = np.diff(vpg)
-    peaks, peak_prop = signal.find_peaks(ppg, height=0, distance=int(fs / 3.3), prominence=0.3)
