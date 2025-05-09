@@ -25,7 +25,7 @@ the peaks in which the points can be found are considered
 This could probably be done better. At the moment, I use welch method to extract psd and grab maximums in specific Hz 
 range to find the 3 peaks. A better approach would be to assess quality of each epoch before averaging.
 
-## Classification
+## Regression
 Not working well for now.
 I take all the features, reduce their number by removing collinear groups and train an ADA boost. There's only 22 
 subjects so I use leave-one-out cross-validation. The result is not good, likely due to low number of subject and just

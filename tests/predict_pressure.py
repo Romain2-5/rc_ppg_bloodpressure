@@ -48,31 +48,33 @@ for f in tqdm(files, f'Processing files', total=len(files)):
         df.loc[df.record == f'{data.subject}_{data.activity}', k] = features[k]
 
 
+# Start feature preparation
 feature_names = ['age', 'height', 'weight', 'BMI', 'pleth_lag', 'bpm'] + list(features.keys())
-
 X = df.loc[df.activity=='sit', feature_names].copy().reset_index(drop=True)
 Y = df.loc[df.activity=='sit', ['bp_sys_start', 'bp_sys_end']].mean(axis=1).values
 
 # Now remove collinearity until n features
-corr = spearmanr(X).correlation
-corr = (corr + corr.T) / 2
-np.fill_diagonal(corr, 1)
-distance_matrix = 1 - np.abs(corr)
-dist_linkage = hierarchy.ward(squareform(distance_matrix))
-cluster_ids = hierarchy.fcluster(dist_linkage, 8, criterion="maxclust")
-cluster_id_to_feature_ids = defaultdict(list)
-for idx, cluster_id in enumerate(cluster_ids):
-    cluster_id_to_feature_ids[cluster_id].append(idx)
-selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
+# corr = spearmanr(X).correlation
+# corr = (corr + corr.T) / 2
+# np.fill_diagonal(corr, 1)
+# distance_matrix = 1 - np.abs(corr)
+# dist_linkage = hierarchy.ward(squareform(distance_matrix))
+# cluster_ids = hierarchy.fcluster(dist_linkage, 18, criterion="maxclust")
+# cluster_id_to_feature_ids = defaultdict(list)
+# for idx, cluster_id in enumerate(cluster_ids):
+#     cluster_id_to_feature_ids[cluster_id].append(idx)
+# selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
+#
+# X = X.iloc[:, selected_features]
 
-X = X.iloc[:, selected_features]
-# Classification
+# Regression with leave one out and feature selection within each fold
 
+# Build pipeline
 rfecv = RFECV(
-    estimator=AdaBoostRegressor(),
+    estimator=AdaBoostRegressor(n_estimators=50),
     step=1,
-    cv=RepeatedKFold(n_splits=4, n_repeats=5),
-    scoring='r2',
+    cv=RepeatedKFold(n_splits=4, n_repeats=4),
+    scoring='neg_root_mean_squared_error',
     min_features_to_select=8,
     n_jobs=2,
 )
@@ -82,11 +84,13 @@ model = AdaBoostRegressor(n_estimators=300)
 
 pipe = Pipeline([
     ('scaler', scaler),
-    # ('feature selection', rfecv),
+    ('feature selection', rfecv),
     ('adaboost', model)
 ])
 
+# Training
 y_pred = np.zeros_like(Y)
+y_real = np.zeros_like(Y)
 loo = LeaveOneOut()
 for i, (train_index, test_index) in enumerate(loo.split(X)):
     print(f"Fold {i}:")
@@ -94,11 +98,11 @@ for i, (train_index, test_index) in enumerate(loo.split(X)):
     y_train = Y[train_index]
 
     pipe.fit(x_train, y_train)
-    y_pred[test_index] = pipe.predict(X.loc[test_index, :])
+    y_pred[i] = pipe.predict(X.loc[test_index, :])[0]
+    y_real[i] = Y[test_index[0]]
 
-    # model.fit(x_train, y_train)
-    # y_pred[test_index] = model.predict(X.loc[test_index, :])
 
+# Result
 plt.figure()
 r2 = r2_score(Y, y_pred)
 sns.regplot(x=Y, y=y_pred)
