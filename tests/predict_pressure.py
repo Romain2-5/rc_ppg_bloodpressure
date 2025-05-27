@@ -2,28 +2,31 @@ from rc_pulse_transit_time import PTTPPGData
 import pandas as pd
 import glob
 import numpy as np
-from sklearn.ensemble import AdaBoostRegressor
-from sklearn.model_selection import LeaveOneOut, RepeatedKFold
+from sklearn.model_selection import LeaveOneOut
 from sklearn.metrics import r2_score
 import seaborn as sns
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import statsmodels.api as sm
-from sklearn.feature_selection import RFECV
-from sklearn.linear_model import Lasso
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures
-from scipy.cluster import hierarchy
-from scipy.spatial.distance import squareform
-from scipy.stats import spearmanr
-from collections import defaultdict
+from sklearn.linear_model import Lasso, LinearRegression
+from sklearn.decomposition import PCA
+
 
 # Get the files
 files = glob.glob('../DATA/csv/*sit.csv')
 
 info_file = '../DATA/info/subjects_info.csv'
 df = pd.read_csv(info_file)
+
+# keep only sitting
+df = df.loc[df.activity == 'sit', :].copy().reset_index(drop=True)
 df['BMI'] = df.weight/df.height**2
+gender_num = np.zeros(len(df))
+gender_num[df.gender == 'female'] = 1
+df['gender_num'] = gender_num
+
+# Get demographic composite feature with PCA
+df['DEM'] = PCA(n_components=1).fit_transform(df[['BMI', 'age', 'height', 'weight', 'gender_num']])
 
 # For each files, get the lag value between pleth at distal and proximal phalanx
 df['pleth_lag'] = np.zeros(len(df))
@@ -39,8 +42,7 @@ for f in tqdm(files, f'Processing files', total=len(files)):
     df.loc[df.record==f'{data.subject}_{data.activity}', 'pleth_lag'] = lag
     df.loc[df.record == f'{data.subject}_{data.activity}', 'bpm'] = bpm
 
-
-    features = data.get_average_peak_feature()
+    features = data.get_average_peak_feature(remove_outlier=True)
     fe_freq = data.get_frequency_features()
     features.update(fe_freq)
 
@@ -49,68 +51,48 @@ for f in tqdm(files, f'Processing files', total=len(files)):
 
 
 # Start feature preparation
-feature_names = ['age', 'height', 'weight', 'BMI', 'pleth_lag', 'bpm'] + list(features.keys())
-X = df.loc[df.activity=='sit', feature_names].copy().reset_index(drop=True)
-Y = df.loc[df.activity=='sit', ['bp_sys_start', 'bp_sys_end']].mean(axis=1).values
+# Try a PPG composite with PCA since there's not enough data to use all features
+df['PPG'] = PCA(n_components=1).fit_transform(df[features.keys()])
+feature_names = ['DEM', 'pleth_lag', 'bpm', 'PPG']
+X = df.loc[:, feature_names].copy()
+Y_sys = df['bp_sys_end'].values
+Y_dia = df['bp_dia_end'].values
 
-# Now remove collinearity until n features
-# corr = spearmanr(X).correlation
-# corr = (corr + corr.T) / 2
-# np.fill_diagonal(corr, 1)
-# distance_matrix = 1 - np.abs(corr)
-# dist_linkage = hierarchy.ward(squareform(distance_matrix))
-# cluster_ids = hierarchy.fcluster(dist_linkage, 18, criterion="maxclust")
-# cluster_id_to_feature_ids = defaultdict(list)
-# for idx, cluster_id in enumerate(cluster_ids):
-#     cluster_id_to_feature_ids[cluster_id].append(idx)
-# selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
-#
-# X = X.iloc[:, selected_features]
+# Simple linear regression to assess the data with the whole dataset
+xo = sm.add_constant(X)
+print(sm.OLS(Y_sys, xo).fit().summary())
 
-# Regression with leave one out and feature selection within each fold
+# Regression with leave one out, using Lasso as there's not a lot of datapoints, try with and without PPG feature
+Y = Y_sys
+for fg in [['DEM', 'pleth_lag', 'bpm', 'PPG'], ['DEM', 'pleth_lag', 'bpm']]:
+    X = df.loc[:, fg].copy()
+    model = Lasso()
+    y_pred = np.zeros_like(Y)
+    y_real = np.zeros_like(Y)
+    loo = LeaveOneOut()
+    for i, (train_index, test_index) in enumerate(loo.split(X)):
+        print(f"Fold {i}:")
+        x_train = X.loc[train_index, :]
+        y_train = Y[train_index]
+        model.fit(x_train, y_train)
+        y_pred[i] = model.predict(X.loc[test_index, :])[0]
+        y_real[i] = Y[test_index[0]]
 
-# Build pipeline
-rfecv = RFECV(
-    estimator=AdaBoostRegressor(n_estimators=50),
-    step=1,
-    cv=RepeatedKFold(n_splits=4, n_repeats=4),
-    scoring='neg_root_mean_squared_error',
-    min_features_to_select=8,
-    n_jobs=2,
-)
+    # Result
+    plt.figure()
+    r2 = r2_score(Y, y_pred)
+    sns.regplot(x=Y, y=y_pred)
+    plt.gca().set_aspect('equal')
+    plt.gca().set_ylim(80, 150)
+    plt.gca().set_xlim(80, 150)
+    plt.plot([80, 150], [80, 150])
+    plt.xlabel('Real Systolic pressure')
+    plt.ylabel('Predicted Systolic pressure')
+    if 'PPG' in fg:
+        plt.title(f'Lasso with PPG - R2 = {r2:.2f}')
+        plt.savefig('../figures/results_lasso_withPPG.jpg')
+    else:
+        plt.title(f'Lasso without PPG - R2 = {r2:.2f}')
+        plt.savefig('../figures/results_lasso_withOutPPG.jpg')
 
-scaler = StandardScaler()
-model = AdaBoostRegressor(n_estimators=300)
-
-pipe = Pipeline([
-    ('scaler', scaler),
-    ('feature selection', rfecv),
-    ('adaboost', model)
-])
-
-# Training
-y_pred = np.zeros_like(Y)
-y_real = np.zeros_like(Y)
-loo = LeaveOneOut()
-for i, (train_index, test_index) in enumerate(loo.split(X)):
-    print(f"Fold {i}:")
-    x_train = X.loc[train_index, :]
-    y_train = Y[train_index]
-
-    pipe.fit(x_train, y_train)
-    y_pred[i] = pipe.predict(X.loc[test_index, :])[0]
-    y_real[i] = Y[test_index[0]]
-
-
-# Result
-plt.figure()
-r2 = r2_score(Y, y_pred)
-sns.regplot(x=Y, y=y_pred)
-plt.gca().set_aspect('equal')
-plt.gca().set_ylim(80, 150)
-plt.gca().set_xlim(80, 150)
-plt.plot([80, 150], [80, 150])
-plt.xlabel('Real Systolic pressure')
-plt.ylabel('Predicted Systolic pressure')
-plt.title(f'R2 = {r2}')
-plt.show()
+    plt.show()

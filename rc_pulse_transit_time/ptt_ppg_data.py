@@ -1,16 +1,12 @@
 import pandas as pd
-from scipy import signal, stats, fft
+from scipy import signal, stats
 import os
 import glob
-
-from scipy.signal import find_peaks
-
 from utils import cheby2_filter, norm_x_corr
 import matplotlib
 matplotlib.use('tkagg')
 import matplotlib.pyplot as plt
 import numpy as np
-from math import prod
 from sklearn.ensemble import IsolationForest  #FOR OUTLIER DETECTION
 
 
@@ -53,7 +49,7 @@ class PTTPPGData:
         ple_col = self.df.filter(like='pleth').columns
         sig = self.df.loc[:, ple_col].values
         sig = stats.zscore(sig, axis=0)
-        sig = cheby2_filter(sig, cut=[0.75, 8], fs=self.fs, btype='bandpass')
+        sig = cheby2_filter(sig, cut=[0.75, 20], fs=self.fs, btype='bandpass')
         self.df[ple_col] = self.df[ple_col].astype(float)
         # inverse signal as it seems flipped
         self.df.loc[:, ple_col] = -sig
@@ -71,6 +67,10 @@ class PTTPPGData:
         wl = 6
         ppg2 = self.df.pleth_2.values
         ppg5 = self.df.pleth_5.values
+        # Filter hard to see only sys peaks
+        ppg2 = cheby2_filter(ppg2, cut=5, fs=self.fs, btype='low')
+        ppg5 = cheby2_filter(ppg5, cut=5, fs=self.fs, btype='low')
+
         epoch = np.arange(0, len(ppg2), self.fs*step)
         lags = []
         for i, e in enumerate(epoch):
@@ -114,6 +114,8 @@ class PTTPPGData:
          """
 
         ppg = self.df.pleth_2.values
+        # Filter more intensly to find vallee
+        # ppgf = cheby2_filter(ppg, cut=10, fs=self.fs, btype='low')
         valley, valley_prop = signal.find_peaks(-ppg, height=0, distance=int(self.fs / 3.3), prominence=0.1)
 
         peaks = []
@@ -138,7 +140,7 @@ class PTTPPGData:
         feature_list = [p.get_features() for p in self.peaks]
         df = pd.concat([pd.Series(f) for f in feature_list], axis=1).T
         if remove_outlier:
-            model = IsolationForest(contamination=0.05)
+            model = IsolationForest(contamination=0.05, random_state=7)
             labels = model.fit_predict(df)
             df = df[labels == 1]
 
@@ -209,11 +211,7 @@ class PPGPeak:
         self.start = start
         self.finish = finish
         self.valid = False
-
-        try:
-            self.__validate()
-        except IndexError:
-            pass
+        self.__validate()
 
 
     def __validate(self):
@@ -227,6 +225,8 @@ class PPGPeak:
 
         highest = np.flip(np.argsort(ppg_peak_props['peak_heights']))
 
+        if not len(highest) >= 2:
+            return
         self.idx_S = ppg_peaks[highest[0]]
         self.idx_D = ppg_peaks[highest[1]]
 
@@ -235,21 +235,35 @@ class PPGPeak:
 
         # Find N in ppg
         ppg_valley, _ = signal.find_peaks(-self.ppg, height=-0.2, distance=20)
-        self.idx_N = ppg_valley[(ppg_valley > self.idx_S) & (ppg_valley < self.idx_D)][0]
+        n = ppg_valley[(ppg_valley > self.idx_S) & (ppg_valley < self.idx_D)]
+        if not len(n):
+            return
+        self.idx_N = n[0]
 
         # Look for peaks w and z in vpg
         vpg_peaks, _ = signal.find_peaks(self.vpg, height=-0.2, distance=20)
-
-        self.idx_w = vpg_peaks[vpg_peaks < self.idx_S][-1]
-        self.idx_z = vpg_peaks[vpg_peaks > self.idx_S][0]
+        w = vpg_peaks[vpg_peaks < self.idx_S]
+        if not len(w):
+            return
+        self.idx_w = w[-1]
+        z = vpg_peaks[vpg_peaks > self.idx_S]
+        if not len(z):
+            return
+        self.idx_z = z[0]
 
         # Look for y in vpg
         vpg_valley, _ = signal.find_peaks(-self.vpg, height=0, distance=20)
-        self.idx_y = vpg_valley[vpg_valley > self.idx_S][0]
+        y = vpg_valley[vpg_valley > self.idx_S]
+        if not len(y):
+            return
+        self.idx_y = y[0]
 
         # Look for c in APG
         apg_peaks, _ = signal.find_peaks(self.apg, height=-0.2, distance=20)
-        self.idx_c = apg_peaks[(apg_peaks > self.idx_y) & (apg_peaks < self.idx_z)][0]
+        c = apg_peaks[(apg_peaks > self.idx_y) & (apg_peaks < self.idx_z)]
+        if not len(c):
+            return
+        self.idx_c = c[0]
 
         self.valid = True
 
@@ -282,6 +296,7 @@ class PPGPeak:
         for idx, lab in zip([self.idx_c], ['c']):
             axes[2].axvline(x_time[idx], color='tab:green')
             axes[2].text(x_time[idx], self.apg[idx], lab)
+        plt.show()
 
     def get_features(self):
         """
@@ -330,14 +345,27 @@ class PPGPeak:
                         z = self.vpg[self.idx_z],
                         c=self.apg[self.idx_c]
                         )
+
+        s_amp = self.ppg[self.idx_S] - self.ppg[0]
+        d_amp = self.ppg[self.idx_D] - self.ppg[0]
+        ap = self.ppg[self.idx_w] - self.ppg[0]
+        relevant_features = dict(ti_S=self.idx_S / self.fs,
+                                 ti_D=self.idx_D / self.fs,
+                                 ti_y=self.idx_y / self.fs,
+                                 ti_sd= (self.idx_D - self.idx_S) /self.fs,
+                                 AI=s_amp / (s_amp - ap) * 100,
+                                 RI=d_amp / s_amp * 100,
+                                 S=s_amp,
+                                 D=d_amp,
+                                 y=self.vpg[self.idx_y] - self.ppg[0],)
         features.update(features2)
 
-        return features
+        return relevant_features
 
 
 if __name__ == '__main__':
 
     files = glob.glob('../DATA/csv/*.csv')
-    pdata = PPTPPGData('../DATA/csv/s15_sit.csv')
+    pdata = PTTPPGData('../DATA/csv/s15_sit.csv')
     pdata.clean_data()
     pdata.compute_ppg_peaks()

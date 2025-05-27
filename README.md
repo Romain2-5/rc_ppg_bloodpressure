@@ -17,7 +17,8 @@ positive peak indicating a lag of less than 50 ms between the two signals.
 ## Peak features
 I extract features from PPG and its derivatives according to (Liang et al., 2018). I detect the valley in the ppg signal
 and separate in peaks from foot to foot. Then I look for the classic points of interest in PPG, VPG and APG. Only 
-the peaks in which the points can be found are considered
+the peaks in which the points can be found are considered. I then use an Isolation forest to further remove outlier
+peaks based on their features.
 
 ![Peak features](figures/peak_feature_example_20250509.jpeg)
 
@@ -26,19 +27,23 @@ This could probably be done better. At the moment, I use welch method to extract
 range to find the 3 peaks. A better approach would be to assess quality of each epoch before averaging.
 
 ## Regression
-Not working well for now.
-I take all the features, reduce their number by removing collinear groups and train an ADA boost. There's only 22 
-subjects so I use leave-one-out cross-validation. The result is not good, likely due to low number of subject and just
-one value of blood pressure per subject. I expect a within subject variability prediction would work better.
+Kind of working, however there are some caveas. I create a composite features with PCAs, one for demography and another
+from PPG features (both temporal and frequency). This is potentially an issue, as it means the PCA are fitted using the 
+test data as well. With so few data points it's not realistic otherwise.
+There's only 22 subjects so I use leave-one-out cross-validation and check the R2 on the test values obtained from each
+trained model. The interesting point is that it seems adding the PPG feature indeed seems to increase accuracy as in
+(Sola et al. 2025). The lag between the two PPG is surprisingly not a very good features. I might have to investigate
+more.
+
+![Without using PPG feature](figures/results_lasso_withOutPPG.jpg)
+![With the PPG feature](figures/results_lasso_withPPG.jpg)
 
 ## Next steps
-- Improve cleaning
+- Improve cleaning (best filter to clean, but keep BP related features?)
 - investigate with moving baseline removal
-- ICA between channels?
-- Convolution with model or template peak
+- Convolution with model or template peak to find them more efficiently
 - Improve feature detection (get the remaining in the APG)
-- use composite features based on literature
-- More statistics on the features
+- use different composite features based on literature
 - Finally try in the walk and run files to challenge the whole thing
 - Bigger dataset
 
@@ -51,3 +56,35 @@ one value of blood pressure per subject. I expect a within subject variability p
 - https://pmc.ncbi.nlm.nih.gov/articles/PMC6163274/
 - https://pmc.ncbi.nlm.nih.gov/articles/PMC7309072/
 - https://www.nature.com/articles/sdata201876
+- https://www.frontiersin.org/journals/digital-health/articles/10.3389/fdgth.2025.1518322/full
+
+## result of a simple linear regression on the whole dataset
+```
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:                      y   R-squared:                       0.633
+Model:                            OLS   Adj. R-squared:                  0.547
+Method:                 Least Squares   F-statistic:                     7.331
+Date:                Tue, 27 May 2025   Prob (F-statistic):            0.00127
+Time:                        17:42:46   Log-Likelihood:                -72.620
+No. Observations:                  22   AIC:                             155.2
+Df Residuals:                      17   BIC:                             160.7
+Df Model:                           4                                         
+Covariance Type:            nonrobust                                         
+==============================================================================
+                 coef    std err          t      P>|t|      [0.025      0.975]
+------------------------------------------------------------------------------
+const        136.0020     13.546     10.040      0.000     107.423     164.581
+DEM            0.4397      0.114      3.841      0.001       0.198       0.681
+pleth_lag     -0.1984      0.133     -1.490      0.154      -0.479       0.082
+bpm           -0.4096      0.285     -1.437      0.169      -1.011       0.192
+PPG            0.3456      0.188      1.837      0.084      -0.051       0.743
+==============================================================================
+Omnibus:                        0.506   Durbin-Watson:                   1.416
+Prob(Omnibus):                  0.777   Jarque-Bera (JB):                0.454
+Skew:                          -0.305   Prob(JB):                        0.797
+Kurtosis:                       2.651   Cond. No.                         456.
+==============================================================================
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+```
