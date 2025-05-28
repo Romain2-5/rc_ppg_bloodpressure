@@ -1,8 +1,8 @@
 # RC PPG tools and prediction of blood pressure (ONGOING WORK)
 This is a little project to re-familiarize myself with PPG signal by building a few tools.
 The aim is to be able to clean and extract features from PPG signal, and ideally predict blood pressure. 
-The Dataset used is the pulse-transit-time (Mehrgardt et al. 2022). It is good for my purpose, but it is lacking an
-instantaneous measure of blood pressure which makes prediction tricky.
+The Dataset used is the pulse-transit-time (Mehrgardt et al. 2022). It is good for my purpose, but it contains only 22
+subjects which limits the power.
 
 (This is still far from perfect and can still be improved)
 

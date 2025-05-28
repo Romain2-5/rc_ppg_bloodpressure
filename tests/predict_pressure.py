@@ -64,7 +64,7 @@ print(sm.OLS(Y_sys, xo).fit().summary())
 
 # Regression with leave one out, using Lasso as there's not a lot of datapoints, try with and without PPG feature
 Y = Y_sys
-for fg in [['DEM', 'pleth_lag', 'bpm', 'PPG'], ['DEM', 'pleth_lag', 'bpm']]:
+for fg in [['DEM', 'bpm', 'PPG'], ['DEM', 'bpm']]:
     X = df.loc[:, fg].copy()
     model = Lasso()
     y_pred = np.zeros_like(Y)
@@ -80,8 +80,8 @@ for fg in [['DEM', 'pleth_lag', 'bpm', 'PPG'], ['DEM', 'pleth_lag', 'bpm']]:
 
     # Result
     plt.figure()
-    r2 = r2_score(Y, y_pred)
-    sns.regplot(x=Y, y=y_pred)
+    r2 = r2_score(y_real, y_pred)
+    sns.regplot(x=y_real, y=y_pred)
     plt.gca().set_aspect('equal')
     plt.gca().set_ylim(80, 150)
     plt.gca().set_xlim(80, 150)
