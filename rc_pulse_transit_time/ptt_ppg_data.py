@@ -1,4 +1,5 @@
 import pandas as pd
+from numpy import floating
 from scipy import signal, stats
 import os
 import glob
@@ -8,7 +9,7 @@ matplotlib.use('tkagg')
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.ensemble import IsolationForest  # FOR OUTLIER DETECTION
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 
 class PTTPPGData:
@@ -50,7 +51,7 @@ class PTTPPGData:
         sig = stats.zscore(sig, axis=0)
         sig = cheby2_filter(sig, cut=[0.75, 20], fs=self.fs, btype='bandpass')
         bs = pd.DataFrame(sig).rolling(window=6*self.fs, center=True, min_periods=1).mean().values
-        # sig = sig - bs
+        sig = sig - bs
         self.df[ple_col] = self.df[ple_col].astype(float)
         self.df.loc[:, ple_col] = -sig
         self.cleaned = True
@@ -58,8 +59,8 @@ class PTTPPGData:
     def get_phalanx_lag(self) -> float:
         """
            Computes the temporal lag between pleth_2 and pleth_5 channels. We assume pleth_2 peaks arrive before pleth_5
-            Some subject seem to present much more frequent pleth_5 arriving before pleth_2. I believe the recordings
-            were sometimes inverted in that dataset.
+            Some subject seem to present much more frequent pleth_5 arriving before pleth_2. I believe the sensors
+            might sometimes be inverted in that dataset. I use the absolute median after windowed cross-correlations.
            Returns:
                float: Lag in milliseconds.
         """
@@ -67,46 +68,46 @@ class PTTPPGData:
         wl = 4
         ppg2 = self.df.pleth_2.values
         ppg5 = self.df.pleth_5.values
-        ppg2 = cheby2_filter(ppg2, cut=8, fs=self.fs, btype='low')
-        ppg5 = cheby2_filter(ppg5, cut=8, fs=self.fs, btype='low')
+        ppg2 = cheby2_filter(ppg2, cut=4, fs=self.fs, btype='low')
+        ppg5 = cheby2_filter(ppg5, cut=4, fs=self.fs, btype='low')
 
         epoch = np.arange(0, len(ppg2), self.fs * step)[:-(wl+1)]
-        lags_neg = []
-        lags_pos = []
+        alag = []
 
         for i, e in enumerate(epoch):
             lag, cco = norm_x_corr(ppg2[e:e + self.fs * wl], ppg5[e:e + self.fs * wl], fs=self.fs)
-            p, _ = signal.find_peaks(cco)
-            plag = lag[p] * 1000
-            pot_plag = plag[(plag > -30) & (plag < 0)]
-            if len(pot_plag):
-                lags_neg.append(pot_plag[-1])
-            else:
-                pot_plag = plag[(plag > 0) & (plag < 30)]
-                if len(pot_plag):
-                    lags_pos.append(pot_plag[0])
-        if len(lags_neg) > len(lags_pos):
-            lags = lags_neg
-        else:
-            lags = lags_pos
-
-        mlag = np.abs(np.mean(lags))
+            lag = lag * 1000
+            polag = lag[np.argmax(cco)]
+            if -100 < polag < 100:
+                alag.append(polag)
+        mlag = np.abs(np.median(alag))
 
         return mlag
 
-    def get_hr(self) -> float:
+    def get_hr(self) -> floating[Any]:
         """
-         Estimates heart rate from pleth_2 using peak detection.
+         Estimates heart rate from pleth_2 using peak detection. Is not resistant to artifact at the moment.
 
          Returns:
              float: Heart rate in beats per minute (bpm).
         """
-        peaks, prop = signal.find_peaks(self.df.pleth_2.values, height=0, distance=int(self.fs / 3.3), prominence=0.3)
-        bpm = np.mean(np.diff(peaks) / self.fs * 60)
+        ppgs = self.df[['pleth_2', 'pleth_5']].values
+        ppg = ppgs[:, np.argmax(np.std(ppgs, 0))]
+        ppg = cheby2_filter(ppg, cut=4, fs=self.fs, btype='low')
+        peaks, prop = signal.find_peaks(ppg, height=0, distance=int(self.fs / 3.3), prominence=0.02)
+        di = np.diff(peaks) / self.fs * 60
+        plt.figure()
+        plt.hist(di, 100)
+        plt.axvline(np.median(di) - stats.iqr(di) * 1.5, color='red')
+        plt.axvline(np.median(di) + stats.iqr(di) * 1.5, color='red')
+        plt.title(f'{self.subject} - real bpm = {self.get_ecg_hr()}')
+        # remove extreme di
+        di = di[(di > np.median(di) - stats.iqr(di) * 1.5) & (di < np.median(di) + stats.iqr(di) * 1.5)]
+        bpm = np.mean(di)
 
         return bpm
 
-    def get_ecg_hr(self) -> float:
+    def get_ecg_hr(self) -> floating[Any]:
         """
          Estimates ECG-based heart rate from pre-computed peak data.
 
@@ -122,7 +123,8 @@ class PTTPPGData:
          Detects valleys in pleth_2 to segment and validate individual PPG cycles,
          instantiating PPGPeak objects and keeping valid ones.
         """
-        ppg = self.df.pleth_2.values
+        ppgs = self.df[['pleth_2', 'pleth_5']].values
+        ppg = ppgs[:, np.argmax(np.std(ppgs, 0))]
         valley, valley_prop = signal.find_peaks(-ppg, height=0, distance=int(self.fs / 3.3), prominence=0.1)
 
         peaks = []
@@ -286,6 +288,7 @@ class PPGPeak:
 
 if __name__ == '__main__':
     files = glob.glob('../DATA/csv/*.csv')
-    pdata = PTTPPGData('../DATA/csv/s15_sit.csv')
-    pdata.clean_data()
-    pdata.compute_ppg_peaks()
+    for f in files:
+        pdata = PTTPPGData(f)
+        pdata.clean_data()
+        pdata.get_hr()

@@ -4,15 +4,16 @@ The aim is to be able to clean and extract features from PPG signal, and ideally
 The Dataset used is the pulse-transit-time (Mehrgardt et al. 2022). It is good for my purpose, but it contains only 22
 subjects which limits the power.
 
-(This is still far from perfect and can still be improved)
+(This can still be improved)
 
 ## Cleaning
 For now, I stick to classics and according to (liang et al., 2018), a 4th order cheby2 filter works well. The selection
 of good period is then done in the feature extraction.
 
 ## lag between proximal and distal finger ppg
-To extract the lag, I'm using cross-correlation on epochs of 5 seconds and keep only the ones in which there is a
-positive peak indicating a lag of less than 50 ms between the two signals.
+To extract the lag, I lowpass filter more the data to isolate systolic peaks, then I'm using cross-correlation on epochs
+of 4 seconds with 3 second overlap and keep only the ones in which there is a positive peak indicating a lag of less
+than 100 ms between the two signals.
 
 ## Peak features
 I extract features from PPG and its derivatives according to (Liang et al., 2018). I detect the valley in the ppg signal
@@ -30,19 +31,20 @@ range to find the 3 peaks. A better approach would be to assess quality of each 
 Kind of working, however there are some caveas. I create a composite features with PCAs, one for demography and another
 from PPG features (both temporal and frequency). This is potentially an issue, as it means the PCA are fitted using the 
 test data as well. With so few data points it's not realistic otherwise.
-There's only 22 subjects so I use leave-one-out cross-validation and check the R2 on the test values obtained from each
-trained model. The interesting point is that it seems adding the PPG feature indeed seems to increase accuracy as in
-(Sola et al. 2025). The lag between the two PPG is surprisingly not a very good features. I might have to investigate
-more.
+There's only 22 subjects so I use leave-one-out cross-validation and a SVR with linear kernel. I check the R2 and
+pearson Rho on the test values obtained from each trained model. Adding PPG improves accuracy as in (Sola et al. 2025),
+only when the lag between the two PPG is also present.
 
-![Without using PPG feature](figures/results_lasso_withOutPPG.jpg)
-![With the PPG feature](figures/results_lasso_withPPG.jpg)
+![Without using PPG feature](figures/results_svr_withOutPPG.jpg)
+![With the PPG feature](figures/results_svr_withPPG.jpg)
+![With the PPG and lag feature](figures/results_svr_withPPG_plethLag.jpg)
 
 ## Next steps
 - Improve cleaning (best filter to clean, but keep BP related features?)
 - investigate with moving baseline removal
 - Convolution with model or template peak to find them more efficiently
-- Improve feature detection (get the remaining in the APG)
+- Improve peak feature detection
+- Improve frequency feature detection
 - use different composite features based on literature
 - Finally try in the walk and run files to challenge the whole thing
 - Bigger dataset
@@ -62,28 +64,29 @@ more.
 ```
                             OLS Regression Results                            
 ==============================================================================
-Dep. Variable:                      y   R-squared:                       0.633
-Model:                            OLS   Adj. R-squared:                  0.547
-Method:                 Least Squares   F-statistic:                     7.331
-Date:                Tue, 27 May 2025   Prob (F-statistic):            0.00127
-Time:                        17:42:46   Log-Likelihood:                -72.620
-No. Observations:                  22   AIC:                             155.2
-Df Residuals:                      17   BIC:                             160.7
-Df Model:                           4                                         
+Dep. Variable:                      y   R-squared:                       0.737
+Model:                            OLS   Adj. R-squared:                  0.655
+Method:                 Least Squares   F-statistic:                     8.959
+Date:                Thu, 12 Jun 2025   Prob (F-statistic):           0.000326
+Time:                        10:11:13   Log-Likelihood:                -68.963
+No. Observations:                  22   AIC:                             149.9
+Df Residuals:                      16   BIC:                             156.5
+Df Model:                           5                                         
 Covariance Type:            nonrobust                                         
 ==============================================================================
                  coef    std err          t      P>|t|      [0.025      0.975]
 ------------------------------------------------------------------------------
-const        136.0020     13.546     10.040      0.000     107.423     164.581
-DEM            0.4397      0.114      3.841      0.001       0.198       0.681
-pleth_lag     -0.1984      0.133     -1.490      0.154      -0.479       0.082
-bpm           -0.4096      0.285     -1.437      0.169      -1.011       0.192
-PPG            0.3456      0.188      1.837      0.084      -0.051       0.743
+const        151.1176     13.816     10.938      0.000     121.828     180.407
+DEM            0.4198      0.100      4.205      0.001       0.208       0.631
+pleth_lag     -0.1144      0.063     -1.825      0.087      -0.247       0.019
+bpm           -0.7467      0.292     -2.554      0.021      -1.367      -0.127
+PPG1           0.2847      0.100      2.834      0.012       0.072       0.498
+PPG2           0.3105      0.151      2.059      0.056      -0.009       0.630
 ==============================================================================
-Omnibus:                        0.506   Durbin-Watson:                   1.416
-Prob(Omnibus):                  0.777   Jarque-Bera (JB):                0.454
-Skew:                          -0.305   Prob(JB):                        0.797
-Kurtosis:                       2.651   Cond. No.                         456.
+Omnibus:                        1.826   Durbin-Watson:                   1.448
+Prob(Omnibus):                  0.401   Jarque-Bera (JB):                0.726
+Skew:                          -0.409   Prob(JB):                        0.696
+Kurtosis:                       3.350   Cond. No.                         583.
 ==============================================================================
 Notes:
 [1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
