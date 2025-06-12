@@ -1,6 +1,6 @@
 import pandas as pd
 from numpy import floating
-from scipy import signal, stats
+from scipy import signal, stats, fft
 import os
 import glob
 from utils import cheby2_filter, norm_x_corr
@@ -86,24 +86,59 @@ class PTTPPGData:
 
     def get_hr(self) -> floating[Any]:
         """
-         Estimates heart rate from pleth_2 using peak detection. Is not resistant to artifact at the moment.
+        Estimates heart rate (HR) in beats per minute (bpm) using both peak detection
+        and frequency domain analysis on the cleanest PPG signal among 'pleth_2' and 'pleth_5'.
 
-         Returns:
-             float: Heart rate in beats per minute (bpm).
+        This method divides the signal into overlapping windows, applies a Hann window,
+        and performs two types of HR estimation:
+          - From the mean interval between detected peaks.
+          - From the frequency of the dominant spectral component.
+
+        A final average HR is computed only for epochs where both methods agree
+        within a statistical IQR-based threshold.
+
+        Note:
+            - Uses a lowpass Chebyshev filter with 3 Hz cutoff.
+            - Window size: 8 seconds, step size: 4 seconds.
+
+        Returns:
+            float: Estimated heart rate in beats per minute.
         """
         ppgs = self.df[['pleth_2', 'pleth_5']].values
         ppg = ppgs[:, np.argmax(np.std(ppgs, 0))]
-        ppg = cheby2_filter(ppg, cut=4, fs=self.fs, btype='low')
-        peaks, prop = signal.find_peaks(ppg, height=0, distance=int(self.fs / 3.3), prominence=0.02)
-        di = np.diff(peaks) / self.fs * 60
-        plt.figure()
-        plt.hist(di, 100)
-        plt.axvline(np.median(di) - stats.iqr(di) * 1.5, color='red')
-        plt.axvline(np.median(di) + stats.iqr(di) * 1.5, color='red')
-        plt.title(f'{self.subject} - real bpm = {self.get_ecg_hr()}')
-        # remove extreme di
-        di = di[(di > np.median(di) - stats.iqr(di) * 1.5) & (di < np.median(di) + stats.iqr(di) * 1.5)]
-        bpm = np.mean(di)
+        ppg = cheby2_filter(ppg, cut=3, fs=self.fs, btype='low')
+
+        step = 4
+        wl = 8
+        nperseg = self.fs * wl
+        epoch = np.arange(0, len(ppg), self.fs * step)[:-(wl + 1)]
+
+        han = signal.windows.hann(nperseg)
+        hz = fft.fftfreq(nperseg, 1/self.fs)[:int(nperseg/2)]
+        bpm_peak = []
+        bpm_sd = []
+        bpm_freq = []
+        for i, e in enumerate(epoch):
+            sig = ppg[e:e + nperseg]
+            # Get peak value
+            peaks, prop = signal.find_peaks(-sig, height=0, distance=int(self.fs / 3.3))
+            di = np.diff(peaks)
+            bpm_peak.append(np.mean(di / self.fs * 60))
+            bpm_sd.append(np.std(di))
+            # Get frequency value
+            ps = np.abs(fft.fft((sig - np.mean(sig)) * han))[:int(nperseg/2)]
+            mhz = hz[np.argmax(ps)]
+            if mhz > 0:
+                bpm_freq.append(1/mhz * 60)
+            else:
+                bpm_freq.append(0)
+
+        # remove values with too high mismatch between freq and peak method
+        bpms = np.mean(np.stack((bpm_peak, bpm_freq), 0), 0)
+        dif = np.abs(np.array(bpm_peak) - np.array(bpm_freq))
+        bpms = bpms[dif < np.median(dif) + stats.iqr(dif)]
+
+        bpm = np.mean(bpms)
 
         return bpm
 
@@ -287,8 +322,4 @@ class PPGPeak:
 
 
 if __name__ == '__main__':
-    files = glob.glob('../DATA/csv/*.csv')
-    for f in files:
-        pdata = PTTPPGData(f)
-        pdata.clean_data()
-        pdata.get_hr()
+    pass
